@@ -1,46 +1,96 @@
+import os
+import requests
+from selenium import webdriver
+from selenium.webdriver.common.by import By
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from bs4 import BeautifulSoup
-import requests
+from transformers import pipeline
+
+# Initialize text generation pipeline
+generator = pipeline("text-generation", model="gpt2")
 
 
-def scrape_static_content(url):
+def scrape_instagram_images(url):
     try:
-        # Send a GET request to the URL
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an HTTPError for bad responses
+        # Initialize Selenium WebDriver
+        driver = webdriver.Chrome()  # Ensure ChromeDriver is installed and accessible
 
-        # Parse the HTML content with BeautifulSoup
-        soup = BeautifulSoup(response.text, "html.parser")
+        # Navigate to the Instagram post URL
+        driver.get(url)
+        driver.implicitly_wait(40)  # Adjust based on your internet speed
 
-        # Extract text and image URLs
-        texts = " ".join([p.get_text() for p in soup.find_all("p")])
-        images = [img["src"] for img in soup.find_all("img", src=True)]
+        # Create a directory to save images
+        folder_name = "instagram_images"
+        if not os.path.exists(folder_name):
+            os.makedirs(folder_name)
 
-        return {"texts": texts, "images": images}
+        # Find all image elements on the page
+        image_elements = driver.find_elements(By.TAG_NAME, 'img')
+
+        # Extract and download image URLs
+        images = []
+        for idx, img in enumerate(image_elements):
+            image_url = img.get_attribute('src')
+            if image_url:
+                images.append(image_url)
+                try:
+                    # Save the image locally
+                    img_data = requests.get(image_url).content
+                    img_name = os.path.join(folder_name, f"image_{idx+1}.jpg")
+                    with open(img_name, 'wb') as file:
+                        file.write(img_data)
+                    print(f"Downloaded: {img_name}")
+                except Exception as e:
+                    print(f"Failed to download image {idx+1}: {e}")
+
+        return {"images": images}
     except Exception as e:
-        raise ValueError(f"Error scraping URL: {e}")
+        raise ValueError(f"Error scraping Instagram post: {e}")
+    finally:
+        driver.quit()
 
 
 @api_view(["POST"])
-def scrape_and_generate(request):
+def scrape_instagram_post(request):
+    """
+    Endpoint to scrape images from an Instagram post.
+    """
     url = request.data.get("url")
     if not url:
         return Response({"error": "URL is required"}, status=400)
 
     try:
-        # Scrape content
-        scraped_data = scrape_static_content(url)
-        texts = scraped_data["texts"]
+        # Scrape Instagram images
+        scraped_data = scrape_instagram_images(url)
         images = scraped_data["images"]
 
-        # Generate a placeholder response since text generation is disabled
-        generated_text = (
-            "Text generation is disabled. This is a placeholder output."
-        )
+        return Response({"images": images}, status=200)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(["POST"])
+def scrape_and_generate(request):
+    """
+    Endpoint to scrape content and generate text using GPT-2.
+    """
+    url = request.data.get("url")
+    if not url:
+        return Response({"error": "URL is required"}, status=400)
+
+    try:
+        # Scrape Instagram images
+        scraped_data = scrape_instagram_images(url)
+        images = scraped_data["images"]
+
+        # Generate placeholder text (or use extracted content for GPT-2 input)
+        text_content = "Scraped Instagram post with images."
+        generated_text = generator(
+            text_content, max_length=150, num_return_sequences=1, truncation=True
+        )[0]["generated_text"]
 
         return Response(
-            {"texts": texts, "images": images, "generated_text": generated_text}
+            {"images": images, "generated_text": generated_text}, status=200
         )
     except Exception as e:
         return Response({"error": str(e)}, status=500)
